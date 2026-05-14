@@ -51,18 +51,17 @@ async function fetchWithHardTimeout(url: string, init: RequestInit, action: stri
   const abortTimer = window.setTimeout(() => controller.abort(), HARD_TIMEOUT_MS);
 
   try {
-    const fetchPromise = fetch(url, {
+    return await fetch(url, {
       ...init,
       signal: controller.signal,
     });
-
-    return await Promise.race([
-      fetchPromise,
-      timeoutPromise(HARD_TIMEOUT_MS, url, action),
-    ]);
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Request timeout sau ${HARD_TIMEOUT_MS / 1000}s. Request có thể bị AI Studio preview/CORS/network chặn trước khi tới Supabase. URL: ${url}. Action: ${action}`);
+    }
+    throw err;
   } finally {
     window.clearTimeout(abortTimer);
-    controller.abort();
   }
 }
 
