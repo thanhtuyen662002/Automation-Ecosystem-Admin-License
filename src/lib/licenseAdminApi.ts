@@ -1,12 +1,16 @@
 import { CreateLicenseParams } from '../types/licenseAdmin';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
+function getSupabaseUrl(): string {
+  const envUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
+  return (envUrl || 'https://twkqwtpgahjusofcpivw.supabase.co').replace(/\/+$/, '');
+}
+
 export function getAdminFunctionUrl(): string {
-  const customUrl = import.meta.env.VITE_LICENSE_ADMIN_FUNCTION_URL;
+  const customUrl = import.meta.env.VITE_LICENSE_ADMIN_FUNCTION_URL?.trim();
   if (customUrl) return customUrl;
-  return `${supabaseUrl}/functions/v1/license-admin`;
+  return `${getSupabaseUrl()}/functions/v1/license-admin`;
 }
 
 export function getAdminSecret(): string | null {
@@ -28,45 +32,56 @@ async function fetchAdmin(action: string, payload: any = {}) {
   }
 
   const url = getAdminFunctionUrl();
-  let res;
-  
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 20_000);
+
+  let res: Response;
+
   try {
+    console.info('[license-admin] calling', { url, action });
+
     res = await fetch(url, {
       method: 'POST',
+      signal: controller.signal,
       headers: {
         'Authorization': `Bearer ${anonKey}`,
         'apikey': anonKey,
         'Content-Type': 'application/json',
-        'x-admin-secret': adminSecret
+        'x-admin-secret': adminSecret,
       },
-      body: JSON.stringify({ action, ...payload })
+      body: JSON.stringify({ action, ...payload }),
     });
   } catch (err: any) {
-    console.error("fetchAdmin Network Error:", err);
-    throw new Error(`Lỗi kết nối mạng đến ${url}. Vui lòng kiểm tra Supabase URL, Function URL, hoặc backend có bị chặn CORS không. Chi tiết: ${err.message}`);
+    if (err?.name === 'AbortError') {
+      throw new Error(`Request timeout: license-admin không phản hồi sau 20 giây. URL: ${url}`);
+    }
+
+    throw new Error(
+      `Không gọi được license-admin. Có thể sai URL, bị CORS, mất mạng, hoặc function chưa deploy. URL: ${url}. Chi tiết: ${err?.message || String(err)}`
+    );
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+
+  const text = await res.text();
+  let data: any = null;
+
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(`license-admin trả về response không phải JSON. HTTP ${res.status}. Body: ${text.slice(0, 500)}`);
   }
 
   if (res.status === 401) {
     throw new Error('unauthorized');
-  } else if (res.status === 403) {
+  }
+
+  if (res.status === 403) {
     throw new Error('forbidden');
   }
 
-  if (!res.ok) {
-    let msg = 'network_error';
-    try {
-      const text = await res.text();
-      const d = JSON.parse(text);
-      msg = d.message || d.error || `HTTP ${res.status}: ${res.statusText}`;
-    } catch(e) {
-      msg = `HTTP Error ${res.status}`;
-    }
-    throw new Error(msg);
-  }
-
-  const data = await res.json();
-  if (!data.ok) {
-    throw new Error(data.message || data.error || 'unknown_error');
+  if (!res.ok || data?.ok !== true) {
+    throw new Error(data?.message || data?.error || `HTTP ${res.status}: ${res.statusText}`);
   }
 
   return data;

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { licenseAdminApi, getAdminSecret, setAdminSecret, removeAdminSecret } from '../lib/licenseAdminApi';
+import { licenseAdminApi, getAdminSecret, setAdminSecret, removeAdminSecret, getAdminFunctionUrl } from '../lib/licenseAdminApi';
 import { Plan, License, CreateLicenseParams, LicenseDevice } from '../types/licenseAdmin';
 import { 
   AlertCircle, ChevronDown, ChevronRight, MonitorSmartphone
@@ -63,6 +63,7 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
   const [statusFilter, setStatusFilter] = useState('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [lastRequestMessage, setLastRequestMessage] = useState('');
 
   // Page state
   const [activeTab, setActiveTab] = useState<'licenses'|'audit'|'customers'>('licenses');
@@ -92,13 +93,18 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
     try {
       setLoading(true);
       setError('');
+      setLastRequestMessage('Fetching licenses...');
       const res = await licenseAdminApi.listLicenses({ search, status: statusFilter, limit: limit, offset: (page-1)*limit });
       setLicenses(res.items);
+      setLastRequestMessage('Fetch success');
     } catch (err: any) {
-      if (err.message === 'unauthorized') {
-        setError('Admin secret không đúng hoặc đã thiếu.');
+      setLastRequestMessage(`Fetch failed: ${err.message}`);
+      if (err.message === 'missing_secret') {
+        setError('Bạn chưa nhập Admin Secret.');
+      } else if (err.message === 'unauthorized') {
+        setError('Admin secret không đúng hoặc LICENSE_ADMIN_SECRET trên Supabase chưa khớp.');
       } else if (err.message === 'forbidden') {
-        setError('Origin chưa được allow trong LICENSE_ADMIN_ALLOWED_ORIGINS.');
+        setError(`CORS bị chặn. Cần thêm origin AI Studio preview vào LICENSE_ADMIN_ALLOWED_ORIGINS hoặc function CORS allow origin hiện tại. (Origin: ${window.location.origin})`);
       } else {
         setError(err.message || 'Không kết nối được Supabase Edge Function.');
       }
@@ -120,6 +126,7 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
     try {
       setIsCreating(true);
       setError('');
+      setLastRequestMessage('Generating key...');
       
       console.log('Sending create license request...');
 
@@ -152,18 +159,27 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
       };
 
       const res = await licenseAdminApi.createLicense(params);
+
+      if (!res?.license?.license_key) {
+        throw new Error('API không trả về license_key. Kiểm tra response của license-admin create_license.');
+      }
       
       setNewlyCreatedKey({
         key: res.license.license_key,
         id: res.license.id
       });
       
+      setLastRequestMessage('Key generated successfully');
+      
       // Reset form
       setCustomerName(''); setCustomerEmail(''); setLabel(''); 
       setPaymentId(''); setNotes('');
       
-      fetchLicenses();
+      fetchLicenses().catch((refreshErr) => {
+        console.warn('[license-admin] refresh list failed after create', refreshErr);
+      });
     } catch (err: any) {
+       setLastRequestMessage(`Create failed: ${err.message}`);
        setError(err.message || 'Create license failed.');
     } finally {
       setIsCreating(false);
@@ -210,6 +226,21 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
           </button>
         </nav>
         <div className="p-4 border-t border-slate-800">
+          <div className="flex flex-col gap-2 mb-4 border-b border-slate-700 pb-4 px-2">
+             <div className="text-[10px] text-slate-400 font-mono break-all" title="Function URL">
+               🌐 {getAdminFunctionUrl()}
+             </div>
+             <div className="text-[10px] text-slate-400 font-mono break-all" title="Origin">
+               📍 {window.location.origin}
+             </div>
+             <div className="text-[10px] text-slate-400 font-mono flex gap-4">
+                <span title="Anon Key">🔑 {import.meta.env.VITE_SUPABASE_ANON_KEY ? 'Yes' : 'No'}</span>
+                <span title="Admin Secret">🛡️ {getAdminSecret() ? 'Yes' : 'No'}</span>
+             </div>
+             <div className="text-[10px] items-start text-slate-500 font-mono mt-1 break-all line-clamp-2" title="Last Request Status">
+               ⚡ {lastRequestMessage || 'Idle'}
+             </div>
+          </div>
           <div className="flex items-center gap-3 px-3 py-2">
             <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center font-bold text-xs shadow-inner">AD</div>
             <div className="flex-1">
