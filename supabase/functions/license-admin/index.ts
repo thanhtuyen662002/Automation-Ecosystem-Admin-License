@@ -284,6 +284,8 @@ serve(async (req: Request) => {
        const licenseId = body.license_id;
        const limit = Math.min(Math.max(parseInt(body.limit) || 100, 1), 200);
 
+       console.log("[audit_logs] license_id:", licenseId, "limit:", limit);
+
        let query = supabaseAdmin.from('license_audit_logs')
          .select('id,license_id,device_id,event_type,severity,detail,created_at')
          .order('created_at', { ascending: false })
@@ -343,7 +345,7 @@ serve(async (req: Request) => {
       }, req);
     }
 
-    return json(400, { ok: false, error: "Unknown Action" }, req);
+    return json(400, { ok: false, error: "UNSUPPORTED_ACTION", message: `Action '${action}' is not implemented in this version of the edge function.` }, req);
   } catch (error: any) {
     console.error(error);
     if (error.message === "Unauthorized") {

@@ -805,18 +805,29 @@ function LicenseDashboard({ onLogout, addNotification, notifications }: {
 function AuditLogsTab() {
   const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     licenseAdminApi.getAuditLogs(null, 200).then(res => {
       setLogs(res.items);
       setLoading(false);
-    }).catch(console.error);
+    }).catch(err => {
+      console.error(err);
+      setError(err.message);
+      setLoading(false);
+    });
   }, []);
 
   return (
     <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col z-10 min-h-0">
-      <div className="px-6 py-4 border-b border-slate-100 shrink-0">
+      <div className="px-6 py-4 border-b border-slate-100 shrink-0 flex justify-between items-center">
         <h2 className="text-lg font-bold text-slate-800">Recent Validation Events & Admin Actions</h2>
+        {error && (
+          <div className="flex items-center gap-2 text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded border border-red-100">
+            <AlertCircle className="w-3 h-3" />
+            {error.includes('MISSING_LICENSE_ID') ? 'Backend: Global logs require updated Supabase function' : error}
+          </div>
+        )}
       </div>
       <div className="flex-1 overflow-auto">
         <table className="w-full text-left border-collapse min-w-[600px]">
@@ -849,18 +860,29 @@ function AuditLogsTab() {
 function CustomersTab() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     licenseAdminApi.listCustomers().then(res => {
       setCustomers(res.items);
       setLoading(false);
-    }).catch(console.error);
+    }).catch(err => {
+      console.error(err);
+      setError(err.message);
+      setLoading(false);
+    });
   }, []);
 
   return (
     <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col z-10 min-h-0">
-      <div className="px-6 py-4 border-b border-slate-100 shrink-0">
+      <div className="px-6 py-4 border-b border-slate-100 shrink-0 flex justify-between items-center">
         <h2 className="text-lg font-bold text-slate-800">Customers Directory</h2>
+        {error && (
+          <div className="flex items-center gap-2 text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded border border-red-100">
+            <AlertCircle className="w-3 h-3" />
+            {error.includes('UNSUPPORTED_ACTION') ? 'Backend: Customers view requires implementation in Supabase function' : error}
+          </div>
+        )}
       </div>
       <div className="flex-1 overflow-auto">
         <table className="w-full text-left border-collapse min-w-[800px]">
