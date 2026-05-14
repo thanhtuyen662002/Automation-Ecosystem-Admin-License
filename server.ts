@@ -50,8 +50,9 @@ async function startServer() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15_000);
 
+      let response: Response;
       try {
-        const response = await fetch(functionUrl, {
+        response = await fetch(functionUrl, {
           method: 'POST',
           signal: controller.signal,
           headers: {
@@ -62,18 +63,22 @@ async function startServer() {
           },
           body: JSON.stringify(req.body),
         });
-
-        const text = await response.text();
-        res.status(response.status).send(text);
-      } catch (fetchErr: any) {
-        if (fetchErr.name === 'AbortError') {
+      } catch (err: any) {
+        if (err?.name === 'AbortError') {
           return res.status(504).json({ ok: false, error: "UPSTREAM_TIMEOUT", message: "Supabase license-admin timeout after 15s" });
         }
-        throw fetchErr;
+        return res.status(500).json({ ok: false, error: "PROXY_FETCH_FAILED", message: err?.message || String(err) });
       } finally {
         clearTimeout(timeoutId);
       }
 
+      const text = await response.text();
+      console.log("[proxy] upstream status:", response.status);
+      console.log("[proxy] upstream body preview:", text.slice(0, 500));
+
+      res.status(response.status);
+      res.setHeader("Content-Type", response.headers.get("content-type") || "application/json");
+      return res.send(text);
     } catch (error: any) {
       console.error('[server proxy] error calling license-admin:', error);
       res.status(500).json({ ok: false, error: 'Proxy error', message: error.message });

@@ -186,8 +186,15 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
 
       const res = await licenseAdminApi.createLicense(params);
 
+      console.info("[license-admin] create response", {
+        ok: res?.ok,
+        licenseId: res?.license?.id,
+        hasRawKey: Boolean(res?.license?.license_key),
+        prefix: res?.license?.license_key_prefix,
+      });
+
       if (!res?.license?.license_key) {
-        throw new Error('API không trả về license_key. Kiểm tra response của license-admin create_license.');
+        throw new Error("API không trả về raw license key. Hãy kiểm tra Network response của POST create_license.");
       }
       
       setNewlyCreatedKey({
@@ -195,7 +202,7 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
         id: res.license.id
       });
       
-      setLastRequestMessage('Key generated successfully');
+      setLastRequestMessage(`Key generated successfully: ${res.license.license_key_prefix || ""}`);
       
       // Reset form
       setCustomerName(''); setCustomerEmail(''); setLabel(''); 

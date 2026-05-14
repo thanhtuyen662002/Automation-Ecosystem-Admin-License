@@ -134,6 +134,12 @@ async function fetchAdmin(action: string, payload: any = {}) {
     throw new Error(data?.message || data?.error || `HTTP ${status}: ${res.statusText}`);
   }
 
+  if (action === "create_license" && !data?.license?.license_key) {
+    throw new Error(
+      `create_license thành công nhưng response không có license_key. Thử lại hoặc kiểm tra server proxy.`
+    );
+  }
+
   return data;
 }
 

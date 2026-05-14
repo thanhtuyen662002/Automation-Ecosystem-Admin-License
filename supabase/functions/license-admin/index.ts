@@ -281,57 +281,66 @@ serve(async (req: Request) => {
     }
 
     if (action === "get_audit_logs") {
-       const { license_id, limit } = body;
+       const licenseId = body.license_id;
+       const limit = Math.min(Math.max(parseInt(body.limit) || 100, 1), 200);
 
-       let query = supabaseAdmin.from('license_audit_logs').select('*').order('created_at', { ascending: false });
-       if (license_id) {
-           query = query.eq('license_id', license_id);
+       let query = supabaseAdmin.from('license_audit_logs')
+         .select('id,license_id,device_id,event_type,severity,detail,created_at')
+         .order('created_at', { ascending: false })
+         .limit(limit);
+
+       if (licenseId) {
+           query = query.eq('license_id', licenseId);
        }
-       query = query.limit(Math.min(100, limit || 100));
 
        const { data, error } = await query;
-       if (error) throw error;
+       
+       if (error) {
+         return json(500, { ok: false, error: "AUDIT_LOGS_FAILED", message: "Failed to list audit logs." }, req);
+       }
 
-       return json(200, { ok: true, items: data }, req);
+       return json(200, { ok: true, items: data ?? [] }, req);
     }
 
     if (action === "list_customers") {
       const { data, error } = await supabaseAdmin.from('licenses')
-        .select('metadata, created_at, plan, status, id, expires_at, label');
+        .select('id,license_key_prefix,label,plan,status,max_devices,expires_at,metadata,created_at,last_seen_at')
+        .order('created_at', { ascending: false })
+        .limit(500);
 
-      if (error) throw error;
+      if (error) {
+        return json(500, { ok: false, error: "LIST_CUSTOMERS_FAILED", message: "Failed to list customers." }, req);
+      }
 
-      // Group by email, fallback to name, fallback to label
-      const map = new Map<string, any>();
-      for (const d of data) {
-        let key = d.metadata?.customer_email?.toLowerCase();
-        if (!key) key = d.metadata?.customer_name?.toLowerCase();
-        if (!key) key = d.label;
-        if (!key) key = 'unknown_' + d.id;
+      const map = new Map();
+
+      for (const lic of data ?? []) {
+        const md = lic.metadata || {};
+        const email = md.customer_email || "unknown";
+        const name = md.customer_name || md.customer_email || "Unknown Customer";
+        const key = email || name;
 
         if (!map.has(key)) {
           map.set(key, {
-            customer_email: d.metadata?.customer_email || 'N/A',
-            customer_name: d.metadata?.customer_name || d.label || 'Unknown',
+            customer_email: email,
+            customer_name: name,
+            license_count: 0,
+            active_license_count: 0,
+            latest_license_at: lic.created_at,
             licenses: [],
-            total_licenses: 0,
-            first_seen: d.created_at
           });
         }
-        const state = map.get(key);
-        state.licenses.push({
-          plan: d.plan,
-          status: d.status,
-          expires_at: d.expires_at,
-          created_at: d.created_at
-        });
-        state.total_licenses += 1;
-        if (new Date(d.created_at) < new Date(state.first_seen)) {
-          state.first_seen = d.created_at;
-        }
+
+        const item = map.get(key);
+        item.license_count += 1;
+        if (lic.status === "active") item.active_license_count += 1;
+        item.licenses.push(lic);
       }
 
-      return json(200, { ok: true, items: Array.from(map.values()) }, req);
+      return json(200, {
+        ok: true,
+        items: Array.from(map.values()),
+      }, req);
     }
 
     return json(400, { ok: false, error: "Unknown Action" }, req);
