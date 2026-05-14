@@ -1,18 +1,37 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { licenseAdminApi, getAdminSecret, setAdminSecret, removeAdminSecret, getAdminFunctionUrl } from '../lib/licenseAdminApi';
 import { Plan, License, CreateLicenseParams, LicenseDevice } from '../types/licenseAdmin';
 import { 
-  AlertCircle, ChevronDown, ChevronRight, MonitorSmartphone
+  AlertCircle, ChevronDown, ChevronRight, MonitorSmartphone, CheckCircle2, XCircle, Info, LogOut
 } from 'lucide-react';
+
+type NotificationType = 'success' | 'error' | 'info';
+
+interface Notification {
+  id: string;
+  type: NotificationType;
+  message: string;
+}
 
 export default function LicenseAdminPage() {
   const [adminSecretStr, setAdminSecretStr] = useState(getAdminSecret() || '');
   const [isAuthorized, setIsAuthorized] = useState(!!getAdminSecret());
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  const addNotification = useCallback((type: NotificationType, message: string) => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setNotifications(prev => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    }, 5000);
+  }, []);
 
   const handleAdminSecretLogin = () => {
     if (adminSecretStr) {
       setAdminSecret(adminSecretStr);
       setIsAuthorized(true);
+      addNotification('success', 'Logged in as administrator');
     }
   };
 
@@ -25,6 +44,7 @@ export default function LicenseAdminPage() {
   if (!isAuthorized) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 font-sans text-slate-900">
+        <NotificationContainer notifications={notifications} />
         <div className="max-w-md w-full bg-white rounded-xl shadow-lg border border-slate-200 p-8 space-y-6">
           <div className="flex flex-col items-center">
             <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mb-4">
@@ -54,10 +74,23 @@ export default function LicenseAdminPage() {
     );
   }
 
-  return <LicenseDashboard onLogout={handleLogout} />;
+  return <LicenseDashboard onLogout={handleLogout} addNotification={addNotification} notifications={notifications} />;
 }
 
-function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
+interface ConfirmationState {
+  isOpen: boolean;
+  title: string;
+  message: string;
+  onConfirm: () => void;
+  confirmText?: string;
+  type?: 'danger' | 'primary';
+}
+
+function LicenseDashboard({ onLogout, addNotification, notifications }: { 
+  onLogout: () => void, 
+  addNotification: (type: NotificationType, message: string) => void,
+  notifications: Notification[]
+}) {
   const [licenses, setLicenses] = useState<License[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -68,6 +101,18 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
   const [lastError, setLastError] = useState('');
   const [lastStartedAt, setLastStartedAt] = useState('');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  // Confirmation state
+  const [confirmation, setConfirmation] = useState<ConfirmationState>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  });
+
+  const confirmAction = (opts: Omit<ConfirmationState, 'isOpen'>) => {
+    setConfirmation({ ...opts, isOpen: true });
+  };
 
   // Page state
   const [activeTab, setActiveTab] = useState<'licenses'|'audit'|'customers'>('licenses');
@@ -186,6 +231,8 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
 
       const res = await licenseAdminApi.createLicense(params);
 
+      addNotification('success', 'License key generated successfully');
+
       console.info("[license-admin] create response", {
         ok: res?.ok,
         licenseId: res?.license?.id,
@@ -208,6 +255,7 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
       setCustomerName(''); setCustomerEmail(''); setLabel(''); 
       setPaymentId(''); setNotes('');
       
+      setPage(1);
       fetchLicenses().catch((refreshErr) => {
         console.warn('[license-admin] refresh list failed after create', refreshErr);
       });
@@ -215,6 +263,7 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
        setLastRequestMessage(`Create failed: ${err.message}`);
        setLastError(err.message);
        setError(err.message || 'Create license failed.');
+       addNotification('error', `Failed to generate key: ${err.message}`);
     } finally {
       window.clearTimeout(uiTimeout);
       setIsCreating(false);
@@ -307,8 +356,18 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
               <p className="text-sm font-medium leading-tight">Root Admin</p>
               <p className="text-[10px] text-slate-500 uppercase tracking-wide">Master Access</p>
             </div>
-            <button onClick={onLogout} className="text-slate-400 hover:text-white p-1" title="Logout">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+            <button 
+              onClick={() => {
+                confirmAction({
+                  title: 'Confirm Logout',
+                  message: 'Are you sure you want to log out of the admin panel?',
+                  onConfirm: onLogout,
+                  confirmText: 'Logout',
+                  type: 'danger'
+                });
+              }} 
+              className="text-slate-400 hover:text-white p-1 transition-colors" title="Logout">
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -320,15 +379,38 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
         <header className="h-16 bg-white border-b border-slate-200 px-8 flex items-center justify-between shrink-0 shadow-sm z-10">
           <h1 className="text-xl font-bold text-slate-800">License Admin Dashboard</h1>
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 px-3 py-1 bg-green-50 text-green-700 rounded-full border border-green-200">
-              <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-              <span className="text-xs font-bold uppercase tracking-wider">Secret Verified</span>
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={fetchLicenses}
+                className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors text-sm font-semibold"
+              >
+                <svg className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                Refresh
+              </button>
+              <div className="flex items-center gap-2 px-3 py-1 bg-green-50 text-green-700 rounded-full border border-green-200">
+                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                <span className="text-xs font-bold uppercase tracking-wider">Secret Verified</span>
+              </div>
             </div>
           </div>
         </header>
 
         {/* Page Layout */}
         <div className="p-8 flex flex-col gap-6 overflow-hidden flex-1">
+          <NotificationContainer notifications={notifications} />
+          
+          <ConfirmationModal 
+            isOpen={confirmation.isOpen}
+            title={confirmation.title}
+            message={confirmation.message}
+            confirmText={confirmation.confirmText}
+            type={confirmation.type}
+            onConfirm={() => {
+              confirmation.onConfirm();
+              setConfirmation(prev => ({ ...prev, isOpen: false }));
+            }}
+            onCancel={() => setConfirmation(prev => ({ ...prev, isOpen: false }))}
+          />
           {error && (
             <div className="bg-red-50 text-red-700 p-4 rounded-xl flex items-center space-x-3 border border-red-100 shadow-sm shrink-0">
               <AlertCircle className="w-5 h-5 flex-shrink-0" />
@@ -560,7 +642,22 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
                                <div className="flex justify-end gap-2 items-center">
                                  <span className="inline-block px-2.5 py-1 text-[10px] font-bold text-red-500 uppercase tracking-widest border border-red-200 rounded bg-red-50">Revoked</span>
                                  <button 
-                                  onClick={async() => { if(confirm('Reactivate this license?')){ await licenseAdminApi.reactivateLicense(lic.id); fetchLicenses(); } }}
+                                  onClick={() => {
+                                    confirmAction({
+                                      title: 'Reactivate License',
+                                      message: 'Are you sure you want to reactivate this license?',
+                                      onConfirm: async () => {
+                                        try {
+                                          await licenseAdminApi.reactivateLicense(lic.id);
+                                          addNotification('success', 'License reactivated');
+                                          fetchLicenses();
+                                        } catch(e: any) {
+                                          addNotification('error', e.message);
+                                        }
+                                      },
+                                      confirmText: 'Reactivate'
+                                    });
+                                  }}
                                   className="px-2 py-1 bg-white border border-slate-200 text-xs font-bold text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 rounded transition-colors shadow-sm"
                                   title="Reactivate"
                                  >
@@ -583,7 +680,23 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
 
                                 {lic.status === 'active' && (
                                    <button 
-                                     onClick={async()=>{ if(confirm('Suspend this license?')){ await licenseAdminApi.suspendLicense(lic.id, 'Admin suspended'); fetchLicenses(); } }}
+                                     onClick={() => {
+                                       confirmAction({
+                                         title: 'Suspend License',
+                                         message: 'Are you sure you want to suspend this license? The customer will lose access temporarily.',
+                                         onConfirm: async () => {
+                                           try {
+                                             await licenseAdminApi.suspendLicense(lic.id, 'Admin suspended');
+                                             addNotification('success', 'License suspended');
+                                             fetchLicenses();
+                                           } catch(e: any) {
+                                             addNotification('error', e.message);
+                                           }
+                                         },
+                                         confirmText: 'Suspend',
+                                         type: 'danger'
+                                       });
+                                     }}
                                      className="px-2 py-1 bg-white border border-slate-200 text-xs font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200 rounded transition-colors shadow-sm"
                                      title="Suspend"
                                    >
@@ -592,7 +705,15 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
                                 )}
                                 {lic.status === 'suspended' && (
                                    <button 
-                                     onClick={async()=>{ await licenseAdminApi.reactivateLicense(lic.id); fetchLicenses(); }}
+                                     onClick={async()=>{ 
+                                       try {
+                                         await licenseAdminApi.reactivateLicense(lic.id);
+                                         addNotification('success', 'License reactivated');
+                                         fetchLicenses();
+                                       } catch(e: any) {
+                                         addNotification('error', e.message);
+                                       }
+                                     }}
                                      className="px-2 py-1 bg-white border border-slate-200 text-xs font-bold text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 rounded transition-colors shadow-sm"
                                      title="Reactivate"
                                    >
@@ -601,7 +722,23 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
                                 )}
 
                                 <button 
-                                  onClick={async()=>{ if(confirm('Revoke this license completely?')){ await licenseAdminApi.revokeLicense(lic.id, 'Admin manual revoke'); fetchLicenses(); } }}
+                                  onClick={() => {
+                                    confirmAction({
+                                      title: 'Revoke License',
+                                      message: 'Are you sure you want to revoke this license completely? This action is hard to undo and the record remains as Revoked.',
+                                      onConfirm: async () => {
+                                        try {
+                                          await licenseAdminApi.revokeLicense(lic.id, 'Admin manual revoke');
+                                          addNotification('success', 'License revoked');
+                                          fetchLicenses();
+                                        } catch(e: any) {
+                                          addNotification('error', e.message);
+                                        }
+                                      },
+                                      confirmText: 'Revoke',
+                                      type: 'danger'
+                                    });
+                                  }}
                                   className="px-2 py-1 bg-white border border-red-200 text-xs font-bold text-red-600 hover:bg-red-50 rounded transition-colors shadow-sm"
                                 >
                                   Revoke
@@ -614,7 +751,12 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
                         {expandedId === lic.id && (
                           <tr>
                             <td colSpan={6} className="bg-slate-50/80 p-0 shadow-inner border-b border-slate-100">
-                               <ExpandedLicenseView license_id={lic.id} maxDevices={lic.max_devices} />
+                               <ExpandedLicenseView 
+                                 license_id={lic.id} 
+                                 maxDevices={lic.max_devices} 
+                                 confirmAction={confirmAction}
+                                 addNotification={addNotification}
+                               />
                             </td>
                           </tr>
                         )}
@@ -692,9 +834,9 @@ function AuditLogsTab() {
             {logs.map((log) => (
               <tr key={log.id} className="hover:bg-slate-50/50">
                 <td className="px-6 py-3 text-xs text-slate-500 whitespace-nowrap">{new Date(log.created_at).toLocaleString()}</td>
-                <td className="px-6 py-3 text-sm font-semibold text-slate-700">{log.action}</td>
+                <td className="px-6 py-3 text-sm font-semibold text-slate-700">{log.event_type}</td>
                 <td className="px-6 py-3 text-xs font-mono text-indigo-600">{log.license_id || '-'}</td>
-                <td className="px-6 py-3 text-xs text-slate-600 truncate max-w-xs">{JSON.stringify(log.ip_address || log.details)}</td>
+                <td className="px-6 py-3 text-xs text-slate-600 truncate max-w-xs" title={JSON.stringify(log.detail)}>{JSON.stringify(log.detail)}</td>
               </tr>
             ))}
           </tbody>
@@ -738,8 +880,8 @@ function CustomersTab() {
               <tr key={i} className="hover:bg-slate-50/50">
                 <td className="px-6 py-3 text-sm font-medium text-slate-800">{c.customer_email}</td>
                 <td className="px-6 py-3 text-sm text-slate-600">{c.customer_name}</td>
-                <td className="px-6 py-3 text-center text-sm font-bold text-indigo-600 bg-indigo-50/50">{c.total_licenses}</td>
-                <td className="px-6 py-3 text-xs text-slate-500">{new Date(c.first_seen).toLocaleDateString()}</td>
+                <td className="px-6 py-3 text-center text-sm font-bold text-indigo-600 bg-indigo-50/50">{c.license_count}</td>
+                <td className="px-6 py-3 text-xs text-slate-500">{new Date(c.latest_license_at).toLocaleDateString()}</td>
                 <td className="px-6 py-3 text-xs text-right space-x-1">
                   {c.licenses.map((l: any, idx: number) => (
                     <span key={idx} className={`inline-block px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider ${l.status === 'active' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
@@ -756,7 +898,17 @@ function CustomersTab() {
   );
 }
 
-function ExpandedLicenseView({ license_id, maxDevices }: { license_id: string, maxDevices: number }) {
+function ExpandedLicenseView({ 
+  license_id, 
+  maxDevices, 
+  confirmAction, 
+  addNotification 
+}: { 
+  license_id: string, 
+  maxDevices: number,
+  confirmAction: (opts: Omit<ConfirmationState, 'isOpen'>) => void,
+  addNotification: (type: NotificationType, message: string) => void
+}) {
   const [devices, setDevices] = useState<LicenseDevice[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -777,12 +929,21 @@ function ExpandedLicenseView({ license_id, maxDevices }: { license_id: string, m
   }, [license_id]);
 
   const handleReset = async () => {
-    if(confirm('Revoke all devices to allow the user to activate on new machines?')) {
-      try {
-         await licenseAdminApi.resetDevices(license_id, 'Admin manual reset');
-         fetchDev();
-      } catch(e) { alert('Failed to reset'); }
-    }
+    confirmAction({
+      title: 'Reset Hardware ID',
+      message: 'Are you sure you want to revoke all devices? This allows the user to activate on new machines up to the seat limit.',
+      confirmText: 'Reset Devices',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await licenseAdminApi.resetDevices(license_id, 'Admin manual reset');
+          addNotification('success', 'Hardware ID reset successful');
+          fetchDev();
+        } catch(e: any) {
+          addNotification('error', `Failed to reset: ${e.message}`);
+        }
+      }
+    });
   }
 
   return (
@@ -854,4 +1015,96 @@ function ExpandedLicenseView({ license_id, maxDevices }: { license_id: string, m
       </div>
     </div>
   )
+}
+
+function NotificationContainer({ notifications }: { notifications: Notification[] }) {
+  return (
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 w-full max-w-md px-4 pointer-events-none">
+      <AnimatePresence mode="popLayout">
+        {notifications.map((n) => (
+          <motion.div
+            key={n.id}
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.2 } }}
+            layout
+            className="pointer-events-auto"
+          >
+            <div className={`
+              flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg border backdrop-blur-md
+              ${n.type === 'success' ? 'bg-emerald-50/90 border-emerald-200 text-emerald-800' : ''}
+              ${n.type === 'error' ? 'bg-red-50/90 border-red-200 text-red-800' : ''}
+              ${n.type === 'info' ? 'bg-blue-50/90 border-blue-200 text-blue-800' : ''}
+            `}>
+              {n.type === 'success' && <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />}
+              {n.type === 'error' && <XCircle className="w-5 h-5 text-red-500 shrink-0" />}
+              {n.type === 'info' && <Info className="w-5 h-5 text-blue-500 shrink-0" />}
+              <p className="text-sm font-semibold">{n.message}</p>
+            </div>
+          </motion.div>
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function ConfirmationModal({ 
+  isOpen, 
+  title, 
+  message, 
+  onConfirm, 
+  onCancel, 
+  confirmText = 'Confirm',
+  type = 'primary'
+}: { 
+  isOpen: boolean, 
+  title: string, 
+  message: string, 
+  onConfirm: () => void, 
+  onCancel: () => void,
+  confirmText?: string,
+  type?: 'danger' | 'primary'
+}) {
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            onClick={onCancel}
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            className="relative w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden border border-slate-200"
+          >
+            <div className="p-6">
+              <h3 className="text-lg font-bold text-slate-900 mb-2 tracking-tight">{title}</h3>
+              <p className="text-slate-600 text-sm leading-relaxed">{message}</p>
+            </div>
+            <div className="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-100">
+              <button 
+                onClick={onCancel}
+                className="px-4 py-2 border border-slate-300 rounded-lg text-sm font-bold text-slate-600 hover:bg-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={onConfirm}
+                className={`px-4 py-2 rounded-lg text-sm font-bold text-white transition-colors shadow-md active:scale-95 ${
+                  type === 'danger' ? 'bg-red-600 hover:bg-red-700' : 'bg-indigo-600 hover:bg-indigo-700'
+                }`}
+              >
+                {confirmText}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
 }
