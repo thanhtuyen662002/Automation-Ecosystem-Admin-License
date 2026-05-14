@@ -8,6 +8,11 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Health check endpoint
+  app.get("/api/health", (req, res) => {
+    res.json({ ok: true, service: "admin-license-proxy" });
+  });
+
   // Proxy endpoint for license-admin
   app.post("/api/license-admin", async (req, res) => {
     try {
@@ -22,24 +27,53 @@ async function startServer() {
         functionUrl = `${supabaseUrl}/functions/v1/license-admin`;
       }
 
+      console.log("[proxy] received action:", req.body?.action);
+      console.log("[proxy] forwarding to:", functionUrl);
+
       // We read the headers from frontend or fallback to env vars
       const authHeader = req.headers.authorization;
       const apiKeyHead = req.headers.apikey as string;
       const adminSecret = req.headers['x-admin-secret'] as string || process.env.LICENSE_ADMIN_SECRET;
 
-      const response = await fetch(functionUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': authHeader || `Bearer ${process.env.VITE_SUPABASE_ANON_KEY}`,
-          'apikey': apiKeyHead || process.env.VITE_SUPABASE_ANON_KEY || '',
-          'Content-Type': 'application/json',
-          'x-admin-secret': adminSecret || '',
-        },
-        body: JSON.stringify(req.body),
-      });
+      const anonKey = process.env.VITE_SUPABASE_ANON_KEY;
+      const finalAuthHeader = authHeader || `Bearer ${anonKey}`;
+      const finalApiKey = apiKeyHead || anonKey || '';
 
-      const text = await response.text();
-      res.status(response.status).send(text);
+      if (!finalApiKey || finalApiKey === 'undefined') {
+        return res.status(500).json({ ok: false, error: "MISSING_ANON_KEY", message: "VITE_SUPABASE_ANON_KEY is missing" });
+      }
+
+      if (!adminSecret) {
+         return res.status(401).json({ ok: false, error: "MISSING_ADMIN_SECRET", message: "Admin secret is missing" });
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15_000);
+
+      try {
+        const response = await fetch(functionUrl, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Authorization': finalAuthHeader,
+            'apikey': finalApiKey,
+            'Content-Type': 'application/json',
+            'x-admin-secret': adminSecret,
+          },
+          body: JSON.stringify(req.body),
+        });
+
+        const text = await response.text();
+        res.status(response.status).send(text);
+      } catch (fetchErr: any) {
+        if (fetchErr.name === 'AbortError') {
+          return res.status(504).json({ ok: false, error: "UPSTREAM_TIMEOUT", message: "Supabase license-admin timeout after 15s" });
+        }
+        throw fetchErr;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
     } catch (error: any) {
       console.error('[server proxy] error calling license-admin:', error);
       res.status(500).json({ ok: false, error: 'Proxy error', message: error.message });
