@@ -64,6 +64,10 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastRequestMessage, setLastRequestMessage] = useState('');
+  const [lastHttpStatus, setLastHttpStatus] = useState('');
+  const [lastError, setLastError] = useState('');
+  const [lastStartedAt, setLastStartedAt] = useState('');
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   // Page state
   const [activeTab, setActiveTab] = useState<'licenses'|'audit'|'customers'>('licenses');
@@ -81,6 +85,19 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
   const [isCreating, setIsCreating] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<{key: string, id: string} | null>(null);
   const [copiedTime, setCopiedTime] = useState(0);
+
+  // Timer effect for elapsed
+  useEffect(() => {
+    let interval: number;
+    if (isCreating || loading) {
+      interval = window.setInterval(() => {
+        setElapsedSeconds(prev => prev + 1);
+      }, 1000);
+    } else {
+      setElapsedSeconds(0);
+    }
+    return () => window.clearInterval(interval);
+  }, [isCreating, loading]);
 
   // Pagination state (client-side for display only in this demo)
   const [page, setPage] = useState(1);
@@ -123,10 +140,19 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
     e.preventDefault();
     if (isCreating) return;
 
+    const uiTimeout = window.setTimeout(() => {
+      setIsCreating(false);
+      setLastRequestMessage('Create timeout ở UI sau 25s');
+      setError(`Request tạo key quá lâu và không có phản hồi. Khả năng cao AI Studio preview đang chặn request trước khi tới Supabase. Origin hiện tại: ${window.location.origin}`);
+    }, 25000);
+
     try {
       setIsCreating(true);
       setError('');
       setLastRequestMessage('Generating key...');
+      setLastStartedAt(new Date().toISOString());
+      setLastError('');
+      setLastHttpStatus('');
       
       console.log('Sending create license request...');
 
@@ -180,8 +206,10 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
       });
     } catch (err: any) {
        setLastRequestMessage(`Create failed: ${err.message}`);
+       setLastError(err.message);
        setError(err.message || 'Create license failed.');
     } finally {
+      window.clearTimeout(uiTimeout);
       setIsCreating(false);
     }
   };
@@ -237,9 +265,34 @@ function LicenseDashboard({ onLogout }: { onLogout: () => void }) {
                 <span title="Anon Key">🔑 {import.meta.env.VITE_SUPABASE_ANON_KEY ? 'Yes' : 'No'}</span>
                 <span title="Admin Secret">🛡️ {getAdminSecret() ? 'Yes' : 'No'}</span>
              </div>
+             <div className="text-[10px] text-slate-400 font-mono flex gap-4">
+                <span title="Time elapsed">⏱️ {elapsedSeconds}s</span>
+                <span title="Started">⏰ {lastStartedAt ? new Date(lastStartedAt).toLocaleTimeString() : '-'}</span>
+             </div>
              <div className="text-[10px] items-start text-slate-500 font-mono mt-1 break-all line-clamp-2" title="Last Request Status">
                ⚡ {lastRequestMessage || 'Idle'}
              </div>
+             <div className="text-[10px] items-start text-red-400 font-mono mt-1 break-all line-clamp-2" title="Last Error">
+               {lastError ? `❌ ${lastError}` : ''}
+             </div>
+             
+             <button
+               onClick={() => {
+                 setLastStartedAt(new Date().toISOString());
+                 setLastRequestMessage('Testing connection...');
+                 setLastError('');
+                 setElapsedSeconds(0);
+                 licenseAdminApi.testConnection()
+                   .then(() => setLastRequestMessage('Connection OK'))
+                   .catch(err => {
+                     setLastRequestMessage('Connection failed');
+                     setLastError(err.message);
+                   });
+               }}
+               className="mt-2 w-full px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded flex justify-center items-center gap-2 border border-slate-600 transition-colors"
+             >
+               Test Connection
+             </button>
           </div>
           <div className="flex items-center gap-3 px-3 py-2">
             <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center font-bold text-xs shadow-inner">AD</div>

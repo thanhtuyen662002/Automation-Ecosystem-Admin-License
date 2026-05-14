@@ -7,7 +7,18 @@ function getSupabaseUrl(): string {
   return (envUrl || 'https://twkqwtpgahjusofcpivw.supabase.co').replace(/\/+$/, '');
 }
 
+export function shouldUseProxy(): boolean {
+  const forceDirect = import.meta.env.VITE_USE_DIRECT_SUPABASE_FUNCTION === 'true';
+  if (forceDirect) return false;
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  return host.includes('run.app') || host.includes('ais-dev');
+}
+
 export function getAdminFunctionUrl(): string {
+  if (typeof window !== 'undefined' && shouldUseProxy()) {
+    return '/api/license-admin';
+  }
   const customUrl = import.meta.env.VITE_LICENSE_ADMIN_FUNCTION_URL?.trim();
   if (customUrl) return customUrl;
   return `${getSupabaseUrl()}/functions/v1/license-admin`;
@@ -25,69 +36,116 @@ export function removeAdminSecret() {
   sessionStorage.removeItem('license_admin_secret');
 }
 
+const HARD_TIMEOUT_MS = 20000;
+
+function timeoutPromise(ms: number, url: string, action: string): Promise<never> {
+  return new Promise((_, reject) => {
+    window.setTimeout(() => {
+      reject(new Error(`Request timeout sau ${ms / 1000}s. Request có thể bị AI Studio preview/CORS/network chặn trước khi tới Supabase. URL: ${url}. Action: ${action}`));
+    }, ms);
+  });
+}
+
+async function fetchWithHardTimeout(url: string, init: RequestInit, action: string) {
+  const controller = new AbortController();
+  const abortTimer = window.setTimeout(() => controller.abort(), HARD_TIMEOUT_MS);
+
+  try {
+    const fetchPromise = fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+
+    return await Promise.race([
+      fetchPromise,
+      timeoutPromise(HARD_TIMEOUT_MS, url, action),
+    ]);
+  } finally {
+    window.clearTimeout(abortTimer);
+    controller.abort();
+  }
+}
+
 async function fetchAdmin(action: string, payload: any = {}) {
   const adminSecret = getAdminSecret();
-  if (!adminSecret) {
-    throw new Error('missing_secret');
-  }
+  if (!adminSecret) throw new Error('missing_secret');
 
   const url = getAdminFunctionUrl();
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), 20_000);
+
+  console.info('[license-admin] start', {
+    url,
+    action,
+    origin: window?.location?.origin,
+    hasAnonKey: Boolean(anonKey),
+    hasAdminSecret: Boolean(adminSecret),
+  });
 
   let res: Response;
 
   try {
-    console.info('[license-admin] calling', { url, action });
-
-    res = await fetch(url, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'Authorization': `Bearer ${anonKey}`,
-        'apikey': anonKey,
-        'Content-Type': 'application/json',
-        'x-admin-secret': adminSecret,
+    res = await fetchWithHardTimeout(
+      url,
+      {
+        method: 'POST',
+        mode: 'cors',
+        cache: 'no-store',
+        headers: {
+          'Authorization': `Bearer ${anonKey}`,
+          'apikey': anonKey,
+          'Content-Type': 'application/json',
+          'x-admin-secret': adminSecret,
+        },
+        body: JSON.stringify({ action, ...payload }),
       },
-      body: JSON.stringify({ action, ...payload }),
-    });
+      action
+    );
   } catch (err: any) {
     if (err?.name === 'AbortError') {
       throw new Error(`Request timeout: license-admin không phản hồi sau 20 giây. URL: ${url}`);
     }
-
+    console.error('[license-admin] fetch failed before response', err);
     throw new Error(
-      `Không gọi được license-admin. Có thể sai URL, bị CORS, mất mạng, hoặc function chưa deploy. URL: ${url}. Chi tiết: ${err?.message || String(err)}`
+      err?.message ||
+      `Không gọi được license-admin. Có thể request bị chặn bởi AI Studio preview/CORS/network trước khi tới Supabase. URL: ${url}`
     );
-  } finally {
-    window.clearTimeout(timeoutId);
   }
 
+  const status = res.status;
   const text = await res.text();
-  let data: any = null;
 
+  console.info('[license-admin] response', {
+    url,
+    action,
+    status,
+    bodyPreview: text.slice(0, 300),
+  });
+
+  let data: any = null;
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
-    throw new Error(`license-admin trả về response không phải JSON. HTTP ${res.status}. Body: ${text.slice(0, 500)}`);
+    throw new Error(`license-admin trả về response không phải JSON. HTTP ${status}. Body: ${text.slice(0, 500)}`);
   }
 
-  if (res.status === 401) {
-    throw new Error('unauthorized');
-  }
-
-  if (res.status === 403) {
-    throw new Error('forbidden');
-  }
+  if (status === 401) throw new Error('unauthorized');
+  if (status === 403) throw new Error('forbidden');
 
   if (!res.ok || data?.ok !== true) {
-    throw new Error(data?.message || data?.error || `HTTP ${res.status}: ${res.statusText}`);
+    throw new Error(data?.message || data?.error || `HTTP ${status}: ${res.statusText}`);
   }
 
   return data;
 }
 
 export const licenseAdminApi = {
+  testConnection: async () => {
+    return fetchAdmin('list_licenses', {
+      search: '',
+      status: 'all',
+      limit: 1,
+      offset: 0,
+    });
+  },
   createLicense: async (params: CreateLicenseParams) => {
     return fetchAdmin('create_license', params);
   },
